@@ -287,7 +287,6 @@ int main(int argc, char **argv)
         DrawText(TextFormat("FPS: %i", GetFPS()), WIDTH - 100, HEIGHT - 20, 20,
                  MAROON);
 
-        printf("%.2f %.2f \n", canvasSourceWindow.x, canvasSourceWindow.y);
 
 
         if (cursor.heldright) {
