@@ -1,10 +1,11 @@
 # Paxx paint app developed on raylib
 ![](paxx.webp)
+
 ### Controls: 
-   LEFT CLICK       : draw, select toolbar items \\
-   HOLD RIGHT CLICK : drag\\
-   ESCAPE           : quit\\
-   D                : darkmode\\
+   LEFT CLICK       : draw, select toolbar items \
+   HOLD RIGHT CLICK : drag\
+   ESCAPE           : quit\
+   D                : darkmode\
 
 You only need raylib to build this. 
 
