@@ -11,8 +11,59 @@
 #include "include/raylib.h"
 #include "include/raymath.h"
 
-/* window_t */
+#define ACTION_BRUSH  (1U << 0U)
+#define ACTION_LINE   (1U << 1U)
+#define ACTION_BEZIER (1U << 2U)
+#define ACTION_ERASE  (1U << 3U)
 
+typedef struct {
+    unsigned int type;
+
+    struct {
+        Vector2 p2;
+        Vector2 p3;
+
+        union
+        {
+            Vector2 p1;
+            Vector2 center;
+        };
+
+        union
+        {
+            float radius;
+            float size;
+        };
+    } info;
+} action_t;
+
+action_t make_action(int type, Vector2 p1, Vector2 p2, Vector2 p3, float size);
+
+#define MAKE_ACTION_LINE(p1, p2, size)               \
+    make_action(ACTION_LINE, (p1), (p2), (p1), size)
+
+#define MAKE_ACTION_BRUSH(p1, size)                   \
+    make_action(ACTION_BRUSH, (p1), (p1), (p1), size)
+
+#define MAKE_ACTION_ERASE(p1, size)                   \
+    make_action(ACTION_ERASE, (p1), (p1), (p1), size)
+
+#define MAKE_ACTION_BEZIER(p1, p2, p3, size)           \
+    make_action(ACTION_BEZIER, (p1), (p2), (p3), size)
+
+typedef struct {
+    size_t current, capacity;
+    action_t *actions;
+} stack_t;
+
+typedef struct {
+    stack_t undo;
+    stack_t redo;
+} action_stack;
+
+void stack_push(stack_t *p, action_t item);
+
+/* window_t */
 enum mode_t {
     MODE_BRUSH,
     MODE_SHAPE_TRIANGLE,
@@ -27,15 +78,15 @@ typedef struct {
 
 typedef struct {
     Vector2 pos;
-    int     height;
-    int     items;
+    int height;
+    int items;
 } toolbar_t;
 
 typedef struct {
-    Vector2   pos, lastpos;
-    bool      left, right, wheel;
-    bool      heldleft, heldright, heldwheel;
-    int       wheelMove;
+    Vector2 pos, lastpos;
+    bool left, right, wheel;
+    bool heldleft, heldright, heldwheel;
+    int wheelMove;
     Texture2D shape;
 } cursor_t;
 
@@ -56,17 +107,17 @@ toolbar_t toolbar = {
 
 typedef struct {
     Vector2 pos;
-    int     height, width;
-    int     closeHide; /* Hide - Close */
-    bool    closed;
+    int height, width;
+    int closeHide; /* Hide - Close */
+    bool closed;
 } menu_t;
 
 static int toolbarDistance;
 
 window_t window = {0};
 cursor_t cursor = {0};
-menu_t   menu = {0};
-bool     palletOpen = false;
+menu_t menu = {0};
+bool palletOpen = false;
 
 Texture2D simpleText, shapesText, linesText, bezierText;
 
@@ -82,26 +133,32 @@ bool collisionMenu;
 void pop_brush_menu();
 void mode_shape_line();
 
-void  menu_update(bool isopen);
-void  draw_cursor();
-void  reset();
-void  colors();
-void  mode_bezier();
-void  mode_delete();
-void  populate_pallete();
-void  loadIcons();
+void menu_update(bool isopen);
+void draw_cursor();
+void reset(bool skip);
+void colors();
+void mode_bezier();
+void mode_delete();
+void populate_pallete();
+void loadIcons();
 float chebyshevDistance(Vector2 p1, Vector2 p2);
 
 #define MENUWIDTH 100
 
 RenderTexture canvas, background;
-Vector2       canvasPosition = {0, 0};
-float         zoom = 1.0f;
-Color         chosenColor;
-bool          draw = true;
+Vector2 canvasPosition = {0, 0};
+float zoom = 1.0f;
+Color chosenColor;
+bool draw = true;
 
 Rectangle pallete[256] = {0};
 Texture2D recyclebin, brush, rubber, line, bezier, gear;
+
+Rectangle canvasSource;
+Rectangle canvasSourceWindow;
+Vector2 shift;
+
+bool darkmode = false;
 
 int main(int argc, char **argv)
 {
@@ -118,12 +175,20 @@ int main(int argc, char **argv)
     menu.closeHide = 50;
     menu.closed = false;
 
-    simpleText = LoadTexture("cursor.png");
-    brush = LoadTexture("assets/paintbrush.png");
-    rubber = LoadTexture("assets/rubber.png");
-    line = LoadTexture("assets/line.png");
-    bezier = LoadTexture("assets/bezier.png");
-    gear = LoadTexture("assets/gear.png");
+
+    simpleText = LoadTexture(
+        "/home/kapa/Documents/coding/c/projects/paxx/cursor.png");
+
+    brush = LoadTexture(
+        "/home/kapa/Documents/coding/c/projects/paxx/assets/paintbrush.png");
+    rubber = LoadTexture(
+        "/home/kapa/Documents/coding/c/projects/paxx/assets/rubber.png");
+    line = LoadTexture(
+        "/home/kapa/Documents/coding/c/projects/paxx/assets/line.png");
+    bezier = LoadTexture(
+        "/home/kapa/Documents/coding/c/projects/paxx/assets/bezier.png");
+    gear = LoadTexture(
+        "/home/kapa/Documents/coding/c/projects/paxx/assets/gear.png");
 
     cursor.shape = simpleText;
 
@@ -152,8 +217,9 @@ int main(int argc, char **argv)
     canvas = LoadRenderTexture(4 * window.width, 4 * window.height);
     background = LoadRenderTexture(window.width, window.height);
 
-    Rectangle canvasSource = {0, 0, 4 * window.width, -4 * window.height};
-    Rectangle canvasSourceWindow = {0, 0, window.width * 4, window.height * 4};
+    canvasSource = (Rectangle) {0, 0, 4 * window.width, -4 * window.height};
+    canvasSourceWindow = (Rectangle) {0, 0, window.width * 4,
+                                      window.height * 4};
 
     Rectangle BCSource = {0, 0, window.width, -window.height};
 
@@ -178,6 +244,8 @@ int main(int argc, char **argv)
     SetConfigFlags(FLAG_MSAA_4X_HINT);
 
     populate_pallete();
+    shift.x = canvasSourceWindow.x - canvasPosition.x;
+    shift.y = canvasSourceWindow.y - canvasPosition.y;
     while (exitWindow) {
         Rectangle menuBoundingBox = {
             menu.pos.x,
@@ -188,6 +256,11 @@ int main(int argc, char **argv)
 
         if (IsKeyPressed(KEY_ESCAPE) || WindowShouldClose())
             exitWindow = false;
+
+        if (IsKeyPressed(KEY_D)) {
+            darkmode = 1 - darkmode;
+            reset(true);
+        }
 
         ClearBackground(RED);
 
@@ -207,28 +280,42 @@ int main(int argc, char **argv)
         DrawTexturePro(background.texture, BCSource, BCSourceWindow, BCPosition,
                        0, WHITE);
 
+
         DrawTexturePro(canvas.texture, canvasSource, canvasSourceWindow,
                        canvasPosition, 0, WHITE);
 
         DrawText(TextFormat("FPS: %i", GetFPS()), WIDTH - 100, HEIGHT - 20, 20,
                  MAROON);
 
+        printf("%.2f %.2f \n", canvasSourceWindow.x, canvasSourceWindow.y);
 
 
         if (cursor.heldright) {
-            canvasPosition.x += dx;
-            canvasPosition.y += dy;
+            canvasSourceWindow.x -= dx;
+            canvasSourceWindow.y -= dy;
         }
 
         if (cursor.wheelMove > 0) {
             zoom *= 1.1f;
             canvasSourceWindow.width *= 1.1f;
             canvasSourceWindow.height *= 1.1f;
+            // canvasPosition.x = (canvasPosition.x + cursor.pos.x) / 2.0f;
+            // canvasPosition.y = (canvasPosition.y + cursor.pos.y) / 2.0f;
+            canvasPosition.x = canvasPosition.x + cursor.pos.x;
+            canvasPosition.y = canvasPosition.y + cursor.pos.y;
+
+            canvasPosition.x *= 0.5f;
+            canvasPosition.y *= 0.5f;
         }
         else if (cursor.wheelMove < 0) {
             zoom /= 1.1f;
             canvasSourceWindow.width /= 1.1f;
             canvasSourceWindow.height /= 1.1f;
+            canvasPosition.x = canvasPosition.x + cursor.pos.x;
+            canvasPosition.y = canvasPosition.y + cursor.pos.y;
+
+            canvasPosition.x *= 0.5f;
+            canvasPosition.y *= 0.5f;
         }
 
         bool l = menu.closed;
@@ -303,7 +390,7 @@ int main(int argc, char **argv)
                 mode_bezier();
                 break;
         }
-        reset();
+        reset(false);
         colors();
 
         draw_cursor();
@@ -314,6 +401,8 @@ int main(int argc, char **argv)
         cursor.lastpos = cursor.pos;
         EndDrawing();
         draw = true;
+        shift.x = canvasSourceWindow.x - canvasPosition.x;
+        shift.y = canvasSourceWindow.y - canvasPosition.y;
     }
     // BeginTextureMode(canvas);
     UnloadTexture(gear);
@@ -363,7 +452,6 @@ void draw_cursor()
     };
 
     Vector2 origin = {6, 5};
-
     DrawTexturePro(simpleText, textureSource, textureDest, origin, 0, WHITE);
 }
 
@@ -473,13 +561,13 @@ void pop_brush_menu()
         }
 
     Vector2 mapped = {
-        (cursor.pos.x + canvasPosition.x) * 1 / zoom,
-        (cursor.pos.y + canvasPosition.y) * 1 / zoom,
+        (cursor.pos.x - (shift.x)) * 1 / zoom,
+        (cursor.pos.y - (shift.y)) * 1 / zoom,
     };
 
     Vector2 lastmapped = {
-        (cursor.lastpos.x + canvasPosition.x) * 1 / zoom,
-        (cursor.lastpos.y + canvasPosition.y) * 1 / zoom,
+        (cursor.lastpos.x - (shift.x)) * 1 / zoom,
+        (cursor.lastpos.y - (shift.y)) * 1 / zoom,
     };
 
     if (cursor.left || cursor.heldleft) {
@@ -497,8 +585,9 @@ void pop_brush_menu()
 #define RESETWIDTH            30
 #define RESETBUTTONCOL        0xAA00AAEE
 #define RESETBUTTONTOUCHEDCOL 0xCC00CCEE
+#define DARKMODECOLOR         0x111111EE
 
-void reset()
+void reset(bool skip)
 {
     static Rectangle resetButton = {
         0,
@@ -510,9 +599,9 @@ void reset()
     DrawRectangleRec(resetButton,
                      GetColor(col ? RESETBUTTONTOUCHEDCOL : RESETBUTTONCOL));
 
-    if (cursor.left && col) {
+    if (cursor.left && col || skip) {
         BeginTextureMode(canvas);
-        ClearBackground(RAYWHITE);
+        ClearBackground(darkmode ? GetColor(DARKMODECOLOR) : RAYWHITE);
         EndTextureMode();
     }
 }
@@ -632,8 +721,8 @@ void colors()
 void mode_shape_line()
 {
     static Vector2 p1 = {0};
-    static bool    first = false;
-    static bool    second = false;
+    static bool first = false;
+    static bool second = false;
 
     static int size = 2;
 
@@ -702,22 +791,20 @@ void mode_shape_line()
 
 
     if (!first && cursor.heldleft) {
-        p1.x = (cursor.pos.x + canvasPosition.x) / zoom;
-        p1.y = (cursor.pos.y + canvasPosition.y) / zoom;
+        p1.x = (cursor.pos.x + shift.x) / zoom;
+        p1.y = (cursor.pos.y + shift.y) / zoom;
         first = true;
     }
 
     Vector2 mapped = {
-        (cursor.pos.x + canvasPosition.x) / zoom,
-        (cursor.pos.y + canvasPosition.y) / zoom,
+        (cursor.pos.x + shift.x) / zoom,
+        (cursor.pos.y + shift.y) / zoom,
     };
 
     if (first && cursor.heldleft) {
-        Vector2 dp1 = {p1.x * zoom - canvasPosition.x,
-                       p1.y * zoom - canvasPosition.y};
+        Vector2 dp1 = {p1.x * zoom - shift.x, p1.y * zoom - shift.y};
 
-        Vector2 dp2 = {mapped.x * zoom - canvasPosition.x,
-                       mapped.y * zoom - canvasPosition.y};
+        Vector2 dp2 = {mapped.x * zoom - shift.x, mapped.y * zoom - shift.y};
 
         DrawLineEx(dp1, dp2, size * zoom, chosenColor);
     }
@@ -727,8 +814,8 @@ void mode_shape_line()
 
     if (second && first && !cursor.heldleft) {
         Vector2 mapped = {
-            (cursor.pos.x + canvasPosition.x) / zoom,
-            (cursor.pos.y + canvasPosition.y) / zoom,
+            (cursor.pos.x + shift.x) / zoom,
+            (cursor.pos.y + shift.y) / zoom,
         };
         first = false;
         second = false;
@@ -804,13 +891,13 @@ void mode_delete()
         }
 
     Vector2 mapped = {
-        (cursor.pos.x + canvasPosition.x) * 1 / zoom,
-        (cursor.pos.y + canvasPosition.y) * 1 / zoom,
+        (cursor.pos.x + shift.x) * 1 / zoom,
+        (cursor.pos.y + shift.y) * 1 / zoom,
     };
 
     Vector2 lastmapped = {
-        (cursor.lastpos.x + canvasPosition.x) * 1 / zoom,
-        (cursor.lastpos.y + canvasPosition.y) * 1 / zoom,
+        (cursor.lastpos.x + shift.x) * 1 / zoom,
+        (cursor.lastpos.y + shift.y) * 1 / zoom,
     };
 
     BeginTextureMode(canvas);
@@ -826,9 +913,9 @@ void mode_delete()
 void mode_bezier()
 {
     static Vector2 p1, p2, p3;
-    static bool    f1 = false, f2 = false, f3 = false;
-    static int     size = 4;
-    bool           closed = 1 - menu.closed;
+    static bool f1 = false, f2 = false, f3 = false;
+    static int size = 4;
+    bool closed = 1 - menu.closed;
 
     if (!closed) {
         int size1 = 2;
@@ -894,35 +981,38 @@ void mode_bezier()
         }
     }
 
+    Vector2 shift_ = {
+        shift.x,
+        shift.y,
+    };
+
     if (cursor.left) {
         if (!f1) {
-            p1 = Vector2Scale(Vector2Add(cursor.pos, canvasPosition), 1 / zoom);
+            p1 = Vector2Scale(Vector2Add(cursor.pos, shift_), 1 / zoom);
             f1 = true;
             return;
         }
 
         if (!f2 && f1) {
-            p2 = Vector2Scale(Vector2Add(cursor.pos, canvasPosition), 1 / zoom);
+            p2 = Vector2Scale(Vector2Add(cursor.pos, shift_), 1 / zoom);
             f2 = true;
             return;
         }
 
         if (f1 && f2 && !f3) {
-            p3 = Vector2Scale(Vector2Add(cursor.pos, canvasPosition), 1 / zoom);
+            p3 = Vector2Scale(Vector2Add(cursor.pos, shift_), 1 / zoom);
             f3 = true;
             return;
         }
     }
 
     if (f1) {
-        Vector2 dp1 = {p1.x * zoom - canvasPosition.x,
-                       p1.y * zoom - canvasPosition.y};
+        Vector2 dp1 = {p1.x * zoom - shift.x, p1.y * zoom - shift.y};
         DrawCircleV(dp1, size * zoom, chosenColor);
     }
 
     if (f2) {
-        Vector2 dp2 = {p2.x * zoom - canvasPosition.x,
-                       p2.y * zoom - canvasPosition.y};
+        Vector2 dp2 = {p2.x * zoom - shift.x, p2.y * zoom - shift.y};
         DrawCircleV(dp2, size * zoom, chosenColor);
     }
 
@@ -1000,3 +1090,31 @@ void loadIcons()
     }
     DrawTexturePro(gear, brushSource, brushDest, origin, 0, WHITE);
 }
+
+action_t make_action(int type, Vector2 p1, Vector2 p2, Vector2 p3, float size)
+{
+    action_t out;
+    out.type = type;
+    out.info.p1 = p1;
+    out.info.p2 = p2;
+    out.info.p3 = p3;
+    out.info.size = size;
+    return out;
+}
+
+#define INIT_STACK_CAPACITY (128)
+
+void stack_push(stack_t *p, action_t item)
+{
+    if (p->current >= p->capacity || p->capacity == 0) {
+        p->capacity = !p->capacity ? INIT_STACK_CAPACITY : p->capacity * 2;
+        p->actions = (action_t *)realloc(p->actions, p->capacity);
+    }
+    p->actions[p->current] = item;
+    ++p->current;
+    return;
+}
+
+
+
+
