@@ -176,19 +176,13 @@ int main(int argc, char **argv)
     menu.closed = false;
 
 
-    simpleText = LoadTexture(
-        "/home/kapa/Documents/coding/c/projects/paxx/cursor.png");
+    simpleText = LoadTexture("cursor.png");
 
-    brush = LoadTexture(
-        "/home/kapa/Documents/coding/c/projects/paxx/assets/paintbrush.png");
-    rubber = LoadTexture(
-        "/home/kapa/Documents/coding/c/projects/paxx/assets/rubber.png");
-    line = LoadTexture(
-        "/home/kapa/Documents/coding/c/projects/paxx/assets/line.png");
-    bezier = LoadTexture(
-        "/home/kapa/Documents/coding/c/projects/paxx/assets/bezier.png");
-    gear = LoadTexture(
-        "/home/kapa/Documents/coding/c/projects/paxx/assets/gear.png");
+    brush = LoadTexture("assets/paintbrush.png");
+    rubber = LoadTexture("assets/rubber.png");
+    line = LoadTexture("assets/line.png");
+    bezier = LoadTexture("assets/bezier.png");
+    gear = LoadTexture("assets/gear.png");
 
     cursor.shape = simpleText;
 
